@@ -64,6 +64,23 @@ class MarkerDetectionTests(unittest.TestCase):
         hits = list(MOD.scan(str(root)))
         self.assertEqual(sorted(h[1] for h in hits), [1, 5])
 
+    def test_assembly_source_with_conflict_marker_is_found(self):
+        root = self._tree({
+            "runtime/go/hybridge/call_amd64.s": (
+                "TEXT call(SB), 7, $0\n"
+                "<<<<<<< HEAD\n"
+                "MOVD $1, R0\n"
+                "=======\n"
+                "MOVD $2, R0\n"
+                ">>>>>>> main\n"
+                "RET\n"
+            )
+        })
+        hits = list(MOD.scan(str(root)))
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0][0], os.path.join("runtime", "go", "hybridge", "call_amd64.s"))
+        self.assertEqual(hits[0][1], 2)
+
     def test_unknown_extension_is_skipped(self):
         root = self._tree({"weird.xyz": "<<<<<<< HEAD\n>>>>>>> main\n"})
         self.assertEqual(list(MOD.scan(str(root))), [])
