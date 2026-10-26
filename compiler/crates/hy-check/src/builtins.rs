@@ -11,7 +11,9 @@
 
 use crate::model::{unwrap_parens, Checker};
 use hy_diag::{Diagnostic, Span};
-use hy_syntax::{Expr, ForKind, LitKind, Place, PlaceKind, SelectArmKind, Stmt, UnOp};
+use hy_syntax::{
+    CallArg, Decl, Expr, ForKind, LitKind, Place, PlaceKind, SelectArmKind, Stmt, UnOp,
+};
 
 impl<'a> Checker<'a> {
     /// Pass-B entry: HYB-E2001 on `defer` + HYB-E2005 on builtin calls.
@@ -115,6 +117,7 @@ impl<'a> Checker<'a> {
             }
             Stmt::Task { callee, args, .. } => {
                 self.check_expr_builtin_args(callee);
+                self.check_named_call_args(callee, args);
                 for a in args {
                     self.check_expr_builtin_args(&a.value);
                 }
@@ -168,6 +171,42 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Issue #1851: only the rust-crate call surface places named arguments
+    /// (`sha3.stream_checksum(n, seed=7)`); Go has none, so on any other
+    /// callee the emitter would drop the name and pass by position while
+    /// some checker passes bind by name. Reject instead (HYB-E1002).
+    fn check_named_call_args(&mut self, callee: &Expr, args: &[CallArg]) {
+        let Some(named) = args.iter().find(|a| a.name.is_some()) else {
+            return;
+        };
+        if let Expr::Field { base, .. } = unwrap_parens(callee) {
+            if let Expr::Ident { name, .. } = unwrap_parens(base) {
+                let imported = self.file.decls.iter().any(|d| {
+                    matches!(d, Decl::Import { path, .. }
+                        if path.strip_prefix("rust/") == Some(name.as_str()))
+                });
+                if imported || matches!(name.as_str(), "sha3" | "regex" | "serde_json" | "flate2") {
+                    return;
+                }
+            }
+        }
+        let arg = named.name.as_deref().unwrap_or_default();
+        self.diags.push(
+            Diagnostic::error(
+                "HYB-E1002",
+                self.path.clone(),
+                named.value.span(),
+                format!(
+                    "named argument `{arg}=` is only supported on rust/ crate calls; Go has no named arguments (HYB-E1002)"
+                ),
+            )
+            .with_notes(vec![
+                "the emitter would pass the arguments by position and ignore the name, silently changing which parameter receives which value".to_string(),
+                "pass the arguments positionally, in declaration order".to_string(),
+            ]),
+        );
+    }
+
     fn check_place_builtin_args(&mut self, place: &Place) {
         match &place.kind {
             PlaceKind::Index { base, index } => {
@@ -185,6 +224,7 @@ impl<'a> Checker<'a> {
         match expr {
             Expr::Call { callee, args, span } => {
                 self.check_expr_builtin_args(callee);
+                self.check_named_call_args(callee, args);
                 let is_type_arg_builtin = matches!(
                     unwrap_parens(callee),
                     Expr::Ident { name, .. }
