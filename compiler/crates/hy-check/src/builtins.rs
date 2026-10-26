@@ -53,6 +53,10 @@ impl<'a> Checker<'a> {
     fn check_stmt_builtin_args_inner(&mut self, stmt: &Stmt, deep: bool) {
         match stmt {
             Stmt::Local(l) => {
+                if deep {
+                    // Closure-body locals are not in the flattened state.
+                    self.named_arg_shadow.extend(l.names.iter().cloned());
+                }
                 for v in &l.values {
                     self.check_expr_builtin_args(v);
                 }
@@ -185,7 +189,8 @@ impl<'a> Checker<'a> {
                     matches!(d, Decl::Import { path, .. }
                         if path.strip_prefix("rust/") == Some(name.as_str()))
                 });
-                if imported || matches!(name.as_str(), "sha3" | "regex" | "serde_json" | "flate2") {
+                // A local or parameter with the crate's name is a value.
+                if imported && !self.named_arg_shadow.contains(name.as_str()) {
                     return;
                 }
             }
@@ -296,11 +301,15 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Expr::FnLit { body, .. } => {
+            Expr::FnLit { params, body, .. } => {
                 // Closure bodies are not flattened into Pass B — deep-walk.
+                let saved = self.named_arg_shadow.clone();
+                self.named_arg_shadow
+                    .extend(params.iter().map(|p| p.name.clone()));
                 for stmt in &body.stmts {
                     self.check_stmt_builtin_args_inner(stmt, /*deep=*/ true);
                 }
+                self.named_arg_shadow = saved;
             }
             Expr::Ident { .. } | Expr::Lit { .. } => {}
         }
