@@ -696,7 +696,7 @@ fn inclusive_range_and_labeled_break() {
         go
     );
     assert!(
-        go.contains("i != "),
+        go.contains("i < "),
         "inclusive last-value stop check:\n{}",
         go
     );
@@ -721,7 +721,7 @@ fn inclusive_range_at_type_maximum_uses_stop_flag() {
         go
     );
     assert!(
-        go.contains("value !="),
+        go.contains("value < "),
         "continue-safe stop check present:\n{}",
         go
     );
